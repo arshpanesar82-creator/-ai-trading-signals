@@ -1,83 +1,82 @@
 import streamlit as st
 import requests
-from datetime import datetime, timedelta
+import time
 
-st.set_page_config(page_title="AI Gold Trader", layout="wide")
-st.title("🚀 AI Gold Trading Signals - XAUUSD")
-st.caption("Real Trade • Entry • SL • TP • Confidence • Break Even • FCS API")
+st.set_page_config(page_title="AI Trader Signals", layout="wide")
+st.title("🚀 My AI Trading Signals - Forex, Metals & Commodities")
+st.caption("Entry • SL • TP • Confidence % • Built on iPad")
 
-FCS_API_KEY = "n6qw4dOnrkP0VzuNyX49PSmPZxkvYz"
+# === YOUR GOLDAPI KEY (already filled) ===
+GOLD_API_KEY = "goldapi-1feasmnsszmqq-io"
 
-# Cache to respect rate limit
-if "last_fetch" not in st.session_state:
-    st.session_state.last_fetch = None
-    st.session_state.price = None
+assets = ["XAUUSD", "XAGUSD", "EURUSD"]
 
-fetch_button = st.button("🔄 Refresh Gold Signal (1 API Call)")
-
-if fetch_button or st.session_state.last_fetch is None or (datetime.now() - st.session_state.last_fetch) > timedelta(minutes=5):
+for symbol in assets:
     try:
-        url = f"https://api-v4.fcsapi.com/forex/latest?symbol=XAUUSD&type=commodity&access_key={FCS_API_KEY}"
-        response = requests.get(url)
-        data = response.json()
-        
-        with st.expander("🔍 Debug: Raw API Response", expanded=False):
-            st.json(data)
-        
-        if data.get("status") is True and "response" in data:
-            resp = data["response"][0] if isinstance(data["response"], list) else data["response"]
-            price = float(resp.get("price", 0))
-            if price > 0:
-                st.session_state.price = price
-                st.session_state.last_fetch = datetime.now()
-                st.success("✅ Gold price updated successfully!")
-            else:
-                st.error("Price returned was 0")
+        if symbol in ["XAUUSD", "XAGUSD"]:
+            # GoldAPI.io for metals - direct price
+            metal = symbol[:3]  # XAU or XAG
+            url = f"https://www.goldapi.io/api/{metal}/USD"
+            headers = {"x-access-token": GOLD_API_KEY}
+            response = requests.get(url, headers=headers)
+            data = response.json()
+            
+            price = float(data.get("price", 0))
+            
+            if price <= 0:
+                st.error(f"No price returned for {symbol}. Response: {data.get('error', 'Unknown')}")
+                continue
+                
+            # Show debug for metals
+            with st.expander(f"Debug: {symbol} raw data", expanded=False):
+                st.json(data)
+                
         else:
-            st.error(f"API Error: {data.get('msg', 'Unknown error')}")
+            # Temporary demo for EURUSD (we'll replace with real forex API next)
+            st.info("EURUSD using demo price (add free forex API in next step)")
+            price = 1.0850   # Replace with real later
+        
+        # === Signal + SL/TP Logic ===
+        direction = "BUY" if "XAU" in symbol else "SELL" if "EUR" in symbol else "HOLD"
+        confidence = 72 + (hash(symbol) % 18)   # Placeholder confidence
+        
+        # Volatility (ATR estimate)
+        atr = price * 0.006 if "XAU" in symbol or "XAG" in symbol else price * 0.0008
+        
+        risk_mult = 1.5
+        reward_mult = 3.0
+        
+        if direction == "BUY":
+            entry = round(price, 2)
+            sl = round(entry - risk_mult * atr, 2)
+            tp = round(entry + reward_mult * atr, 2)
+        elif direction == "SELL":
+            entry = round(price, 2)
+            sl = round(entry + risk_mult * atr, 2)
+            tp = round(entry - reward_mult * atr, 2)
+        else:
+            entry = round(price, 2)
+            sl = tp = "N/A"
+        
+        # Display
+        color = "🟢" if direction == "BUY" else "🔴" if direction == "SELL" else "⚪"
+        st.subheader(f"{color} {symbol}")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1: st.metric("Direction", direction)
+        with col2: st.metric("Entry Price", f"{entry:.2f}")
+        with col3: st.metric("Stop Loss", sl if sl != "N/A" else "N/A")
+        with col4: st.metric("Take Profit", tp if tp != "N/A" else "N/A")
+        
+        st.caption(f"**Confidence: {confidence}%** • Risk:Reward ≈ 1:2")
+        st.divider()
+        
     except Exception as e:
-        st.error(f"Fetch failed: {str(e)[:120]}")
+        st.error(f"Error with {symbol}: {str(e)[:120]}")
 
-# Display signal if we have price
-if st.session_state.price is not None:
-    price = st.session_state.price
-    
-    # Simple AI-like signal logic for Gold
-    direction = "BUY" if price > 0 else "SELL"  # Placeholder - you can make it smarter later
-    confidence = 68 + (hash(str(price)) % 17)   # Gives 68-84% realistic range
-    
-    # ATR estimate for Gold (typical daily volatility ~0.6%)
-    atr = price * 0.006
-    
-    risk_mult = 1.5
-    reward_mult = 3.0
-    
-    if direction == "BUY":
-        entry = round(price, 2)
-        sl = round(entry - risk_mult * atr, 2)
-        tp = round(entry + reward_mult * atr, 2)
-        be_level = round(entry + atr, 2)
-    else:
-        entry = round(price, 2)
-        sl = round(entry + risk_mult * atr, 2)
-        tp = round(entry - reward_mult * atr, 2)
-        be_level = round(entry - atr, 2)
-    
-    color = "🟢" if direction == "BUY" else "🔴"
-    st.subheader(f"{color} XAUUSD (Gold)")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1: st.metric("Direction", direction)
-    with col2: st.metric("Entry Price", f"{entry}")
-    with col3: st.metric("Stop Loss", f"{sl}")
-    with col4: st.metric("Take Profit", f"{tp}")
-    
-    st.caption(f"**Trade Confidence: {confidence}%** • Risk:Reward ≈ 1:2")
-    st.info(f"💡 Break Even Suggestion: Move SL to Entry when price reaches **{be_level}** (+1R profit)")
-    
-    st.divider()
-    st.caption(f"Last updated: {st.session_state.last_fetch.strftime('%H:%M:%S') if st.session_state.last_fetch else 'Never'}")
-else:
-    st.info("Click 'Refresh Gold Signal' to load current XAUUSD price and trade recommendation.")
+if st.button("🔄 Refresh Signals Now"):
+    st.rerun()
 
-st.caption("Only XAUUSD • 5-minute cache • Manual refresh recommended (FCS free tier safe) • Education only - Not financial advice")
+st.caption("Auto-refreshing every 60s • Education only - Not financial advice • GoldAPI free tier: 100 req/month")
+time.sleep(60)
+st.rerun()
