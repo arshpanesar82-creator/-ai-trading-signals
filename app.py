@@ -1,82 +1,160 @@
 import streamlit as st
-import requests
-import time
+import yfinance as yf
+import pandas as pd
+import plotly.graph_objects as go
+from datetime import datetime
 
-st.set_page_config(page_title="AI Trader Signals", layout="wide")
-st.title("🚀 My AI Trading Signals - Forex, Metals & Commodities")
-st.caption("Entry • SL • TP • Confidence % • Built on iPad")
+st.set_page_config(page_title="Arshdeep's Free AI Trading Tool", layout="wide")
+st.title("🚀 Arshdeep's Free Lifetime AI Trading Analyzer")
+st.markdown("**XAUUSD • Silver • Currency Pairs** | Entry + Stop Loss + Confidence % | 100% Free Forever")
 
-# === YOUR GOLDAPI KEY (already filled) ===
-GOLD_API_KEY = "goldapi-1feasmnsszmqq-io"
+# Asset mapping (proven free yfinance tickers)
+assets = {
+    "XAUUSD (Gold Spot)": "GC=F",
+    "XAGUSD (Silver Spot)": "SI=F",
+    "EURUSD": "EURUSD=X",
+    "GBPUSD": "GBPUSD=X",
+    "USDJPY": "USDJPY=X",
+    "AUDUSD": "AUDUSD=X",
+    "USDCAD": "USDCAD=X",
+    "NZDUSD": "NZDUSD=X",
+}
 
-assets = ["XAUUSD", "XAGUSD", "EURUSD"]
+# Sidebar
+st.sidebar.header("Settings")
+selected_asset = st.sidebar.selectbox("Select Asset", list(assets.keys()))
+timeframe = st.sidebar.selectbox("Timeframe", ["1h", "4h", "1d"])
+analyze_button = st.sidebar.button("🔥 ANALYZE NOW", type="primary")
 
-for symbol in assets:
-    try:
-        if symbol in ["XAUUSD", "XAGUSD"]:
-            # GoldAPI.io for metals - direct price
-            metal = symbol[:3]  # XAU or XAG
-            url = f"https://www.goldapi.io/api/{metal}/USD"
-            headers = {"x-access-token": GOLD_API_KEY}
-            response = requests.get(url, headers=headers)
-            data = response.json()
-            
-            price = float(data.get("price", 0))
-            
-            if price <= 0:
-                st.error(f"No price returned for {symbol}. Response: {data.get('error', 'Unknown')}")
-                continue
-                
-            # Show debug for metals
-            with st.expander(f"Debug: {symbol} raw data", expanded=False):
-                st.json(data)
-                
+def calculate_indicators(df):
+    # Simple Moving Averages
+    df['SMA20'] = df['Close'].rolling(20).mean()
+    df['SMA50'] = df['Close'].rolling(50).mean()
+    
+    # RSI
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # MACD
+    ema12 = df['Close'].ewm(span=12).mean()
+    ema26 = df['Close'].ewm(span=26).mean()
+    df['MACD'] = ema12 - ema26
+    df['Signal'] = df['MACD'].ewm(span=9).mean()
+    
+    # ATR for Stop Loss
+    high_low = df['High'] - df['Low']
+    high_close = (df['High'] - df['Close'].shift()).abs()
+    low_close = (df['Low'] - df['Close'].shift()).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    df['ATR'] = tr.rolling(14).mean()
+    
+    return df
+
+def generate_signal(df):
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    score = 0
+    reasons = []
+    
+    # Trend
+    if latest['Close'] > latest['SMA50']:
+        score += 25
+        reasons.append("Price above SMA50 (Uptrend)")
+    if latest['SMA20'] > latest['SMA50']:
+        score += 20
+        reasons.append("SMA20 > SMA50 (Golden Cross)")
+    
+    # Momentum
+    if latest['RSI'] > 50 and latest['RSI'] < 70:
+        score += 20
+        reasons.append("Healthy RSI momentum")
+    elif latest['RSI'] < 30:
+        score += 15
+        reasons.append("Oversold RSI")
+    
+    # MACD
+    if latest['MACD'] > latest['Signal'] and prev['MACD'] <= prev['Signal']:
+        score += 20
+        reasons.append("MACD Bullish Crossover")
+    elif latest['MACD'] > 0:
+        score += 10
+        reasons.append("MACD above zero")
+    
+    direction = "BULLISH" if score >= 50 else "BEARISH" if score <= 30 else "NEUTRAL"
+    confidence = min(max(score, 30), 95)  # cap for realism
+    
+    # Entry & Stop Loss
+    entry = round(latest['Close'], 4)
+    atr = latest['ATR']
+    if direction == "BULLISH":
+        sl = round(entry - 1.8 * atr, 4)
+        trade_type = "LONG"
+    else:
+        sl = round(entry + 1.8 * atr, 4)
+        trade_type = "SHORT"
+    
+    return {
+        "direction": direction,
+        "trade_type": trade_type,
+        "entry": entry,
+        "stop_loss": sl,
+        "confidence": confidence,
+        "reasons": reasons,
+        "current_price": entry,
+        "rsi": round(latest['RSI'], 2),
+        "atr": round(atr, 4)
+    }
+
+if analyze_button or st.session_state.get("last_analysis"):
+    with st.spinner(f"Fetching latest {selected_asset} data..."):
+        ticker = assets[selected_asset]
+        # Fetch enough data for indicators
+        data = yfinance.download(ticker, period="60d", interval=timeframe, progress=False)
+        
+        if data.empty:
+            st.error("No data received. Try again later.")
         else:
-            # Temporary demo for EURUSD (we'll replace with real forex API next)
-            st.info("EURUSD using demo price (add free forex API in next step)")
-            price = 1.0850   # Replace with real later
-        
-        # === Signal + SL/TP Logic ===
-        direction = "BUY" if "XAU" in symbol else "SELL" if "EUR" in symbol else "HOLD"
-        confidence = 72 + (hash(symbol) % 18)   # Placeholder confidence
-        
-        # Volatility (ATR estimate)
-        atr = price * 0.006 if "XAU" in symbol or "XAG" in symbol else price * 0.0008
-        
-        risk_mult = 1.5
-        reward_mult = 3.0
-        
-        if direction == "BUY":
-            entry = round(price, 2)
-            sl = round(entry - risk_mult * atr, 2)
-            tp = round(entry + reward_mult * atr, 2)
-        elif direction == "SELL":
-            entry = round(price, 2)
-            sl = round(entry + risk_mult * atr, 2)
-            tp = round(entry - reward_mult * atr, 2)
-        else:
-            entry = round(price, 2)
-            sl = tp = "N/A"
-        
-        # Display
-        color = "🟢" if direction == "BUY" else "🔴" if direction == "SELL" else "⚪"
-        st.subheader(f"{color} {symbol}")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        with col1: st.metric("Direction", direction)
-        with col2: st.metric("Entry Price", f"{entry:.2f}")
-        with col3: st.metric("Stop Loss", sl if sl != "N/A" else "N/A")
-        with col4: st.metric("Take Profit", tp if tp != "N/A" else "N/A")
-        
-        st.caption(f"**Confidence: {confidence}%** • Risk:Reward ≈ 1:2")
-        st.divider()
-        
-    except Exception as e:
-        st.error(f"Error with {symbol}: {str(e)[:120]}")
+            df = calculate_indicators(data)
+            result = generate_signal(df)
+            
+            # Display results
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Current Price", f"{result['current_price']}")
+            with col2:
+                st.metric("Signal", result['direction'], delta=result['trade_type'])
+            with col3:
+                st.metric("Entry Price", f"{result['entry']}")
+            with col4:
+                st.metric("Stop Loss", f"{result['stop_loss']}", delta="Risk")
+            
+            st.subheader(f"🧠 AI Confidence: **{result['confidence']}%**")
+            st.progress(result['confidence'] / 100)
+            
+            st.info(f"**Recommended Trade**: {result['trade_type']} {selected_asset} at **{result['entry']}** | SL at **{result['stop_loss']}**")
+            
+            st.write("**Why this signal?**")
+            for reason in result['reasons']:
+                st.success(reason)
+            
+            # Chart
+            st.subheader("Live Chart with Indicators")
+            fig = go.Figure()
+            fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"))
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA20'], name="SMA20", line=dict(color="orange")))
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name="SMA50", line=dict(color="blue")))
+            fig.update_layout(title=f"{selected_asset} - {timeframe} Chart", xaxis_rangeslider_visible=False, height=600)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Indicators table
+            st.dataframe(df[['Close', 'SMA20', 'SMA50', 'RSI', 'MACD', 'ATR']].tail(5).round(4), use_container_width=True)
+            
+            st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Data from Yahoo Finance (free)")
 
-if st.button("🔄 Refresh Signals Now"):
-    st.rerun()
-
-st.caption("Auto-refreshing every 60s • Education only - Not financial advice • GoldAPI free tier: 100 req/month")
-time.sleep(60)
-st.rerun()
+st.sidebar.markdown("---")
+st.sidebar.info("✅ Built exclusively for you by Grok\n**Completely free forever** - no API keys needed\nRun it anytime on your computer!")
+st.caption("⚠️ This is for educational purposes only. Not financial advice. Always do your own research and manage risk.")
